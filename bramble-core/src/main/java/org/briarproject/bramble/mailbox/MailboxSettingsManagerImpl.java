@@ -59,15 +59,7 @@ class MailboxSettingsManagerImpl implements MailboxSettingsManager {
 		String onion = s.get(SETTINGS_KEY_ONION);
 		String token = s.get(SETTINGS_KEY_TOKEN);
 		if (isNullOrEmpty(onion) || isNullOrEmpty(token)) return null;
-		int[] ints = s.getIntArray(SETTINGS_KEY_SERVER_SUPPORTS);
-		// We know we were paired, so we must have proper serverSupports
-		if (ints == null || ints.length == 0 || ints.length % 2 != 0) {
-			throw new DbException();
-		}
-		List<MailboxVersion> serverSupports = new ArrayList<>();
-		for (int i = 0; i < ints.length - 1; i += 2) {
-			serverSupports.add(new MailboxVersion(ints[i], ints[i + 1]));
-		}
+		List<MailboxVersion> serverSupports = parseServerSupports(s);
 		try {
 			MailboxAuthToken tokenId = MailboxAuthToken.fromString(token);
 			return new MailboxProperties(onion, tokenId, true, serverSupports);
@@ -114,18 +106,23 @@ class MailboxSettingsManagerImpl implements MailboxSettingsManager {
 		long lastAttempt = s.getLong(SETTINGS_KEY_LAST_ATTEMPT, -1);
 		long lastSuccess = s.getLong(SETTINGS_KEY_LAST_SUCCESS, -1);
 		int attempts = s.getInt(SETTINGS_KEY_ATTEMPTS, 0);
-		return new MailboxStatus(lastAttempt, lastSuccess, attempts);
+		List<MailboxVersion> serverSupports = parseServerSupports(s);
+		return new MailboxStatus(lastAttempt, lastSuccess, attempts,
+				serverSupports);
 	}
 
 	@Override
 	public void recordSuccessfulConnection(Transaction txn, long now)
 			throws DbException {
+		Settings oldSettings =
+				settingsManager.getSettings(txn, SETTINGS_NAMESPACE);
 		Settings s = new Settings();
 		s.putLong(SETTINGS_KEY_LAST_ATTEMPT, now);
 		s.putLong(SETTINGS_KEY_LAST_SUCCESS, now);
 		s.putInt(SETTINGS_KEY_ATTEMPTS, 0);
 		settingsManager.mergeSettings(txn, s, SETTINGS_NAMESPACE);
-		MailboxStatus status = new MailboxStatus(now, now, 0);
+		List<MailboxVersion> serverSupports = parseServerSupports(oldSettings);
+		MailboxStatus status = new MailboxStatus(now, now, 0, serverSupports);
 		txn.attach(new OwnMailboxConnectionStatusEvent(status));
 	}
 
@@ -140,7 +137,9 @@ class MailboxSettingsManagerImpl implements MailboxSettingsManager {
 		newSettings.putLong(SETTINGS_KEY_LAST_ATTEMPT, now);
 		newSettings.putInt(SETTINGS_KEY_ATTEMPTS, newAttempts);
 		settingsManager.mergeSettings(txn, newSettings, SETTINGS_NAMESPACE);
-		MailboxStatus status = new MailboxStatus(now, lastSuccess, newAttempts);
+		List<MailboxVersion> serverSupports = parseServerSupports(oldSettings);
+		MailboxStatus status = new MailboxStatus(now, lastSuccess, newAttempts,
+				serverSupports);
 		txn.attach(new OwnMailboxConnectionStatusEvent(status));
 		if (status.hasProblem(now)) txn.attach(new MailboxProblemEvent());
 	}
@@ -163,5 +162,19 @@ class MailboxSettingsManagerImpl implements MailboxSettingsManager {
 		String filename = s.get(String.valueOf(id.getInt()));
 		if (isNullOrEmpty(filename)) return null;
 		return filename;
+	}
+
+	private List<MailboxVersion> parseServerSupports(Settings s)
+			throws DbException {
+		int[] ints = s.getIntArray(SETTINGS_KEY_SERVER_SUPPORTS);
+		// We know we were paired, so we must have proper serverSupports
+		if (ints == null || ints.length == 0 || ints.length % 2 != 0) {
+			throw new DbException();
+		}
+		List<MailboxVersion> serverSupports = new ArrayList<>();
+		for (int i = 0; i < ints.length - 1; i += 2) {
+			serverSupports.add(new MailboxVersion(ints[i], ints[i + 1]));
+		}
+		return serverSupports;
 	}
 }
